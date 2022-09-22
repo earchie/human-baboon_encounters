@@ -1,0 +1,749 @@
+---
+title: 'Rnotebook Code for Troubled waters: Water availability drives human-baboon
+  encounters in a protected, semi-arid landscape'
+output:
+  html_document:
+    df_print: paged
+---
+
+## Introduction
+This paper utilizes 27 years of data collected as part of the Amboseli Baboon Research Project (ABRP) on human-baboon encounters in the Amboseli ecosystem. As the Amboseli Baboon Research Project is one of the longest-running animal studies in the world, many different datasets were incorporated into this paper to best understand the drivers and consequences of human-baboon encounters in Amboseli. In the Dryad Repository for this paper, we have included all tables referred to in this Rnotebook file. The code presented here represents all final code for the plots and models described in our paper. Generally, each code chunk represents the code required to build the plot or model referred to. Refer to the Methods and Supplementary Methods in our paper to gain a full understanding of all tables and all predictors used in the models. 
+
+## The Data
+
+- Human-baboon encounters across 27 years
+- Weather
+- Group size
+- Group home range (available 2004-2020)
+- Group proximity to wells
+- Well construction/abandonment
+- Infant mortality 
+- Baboon infant, juvenile, and adult human-caused mortality
+- Interbirth intervals
+- Parasitism (whipworm count + helminth richness)
+- Fecal glucocorticoid concentrations
+
+## Download libraries
+```{r}
+#use install.packages() to install any packages not downloaded to your RStudio then open the libraries using this code chunk
+
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+
+```
+
+## Download tables
+```{r}
+#Set your working directory to where these files are then download all the tables
+
+encounters_across_time_season <- read.csv("encounters_across_time_season.csv", na.strings="\\N") 
+all_points <- read.csv("all_points.csv", na.strings="\\N")
+human_encounters_humansonly <- read.csv("human_encounters_humansonly.csv", na.strings="\\N")
+human_encounters_livestock <- read.csv("human_encounters_livestock.csv", na.strings="\\N")
+human_encounters_dogs <- read.csv("human_encounters_dogs.csv", na.strings="\\N")
+human_encounters_garbage <- read.csv("human_encounters_garbage.csv", na.strings="\\N")
+cd_hsg <- read.csv("cd_hsg.csv", na.strings="\\N")
+cd_hsg_home_range <- read.csv("cd_hsg_home_range.csv", na.strings="\\N")
+all_gps_distance <- read.csv("all_gps_distance.csv", na.strings="\\N")
+supplement_figure_points <- read.csv("supplement_figure_points.csv", na.strings="\\N")
+distance_from_wells <- read.csv("distance_from_wells.csv", na.strings="\\N")
+well_points <- read.csv("well_points.csv", na.strings="\\N")
+well_status <- read.csv("well_status.csv", na.strings="\\N")
+mortality_causes <- read.csv("mortality_causes.csv", na.strings="\\N")
+infant_mortality <- read.csv("infant_mortality.csv", na.strings="\\N")
+interbirth_intervals <- read.csv("interbirth_intervals.csv", na.strings="\\N")
+parasitism_females <- read.csv("parasitism_females.csv", na.strings="\\N")
+parasitism_males <- read.csv("parasitism_males.csv", na.strings="\\N")
+gc_females <- read.csv("gc_females.csv", na.strings=c("\\N", "NA"))
+gc_males <- read.csv("gc_males.csv", na.strings="\\N")
+waterhole_df <- read.csv("waterhole_df.csv", na.strings="\\N")
+
+```
+
+
+## Figure 2A: Plotting types of human encounters across time
+```{r fig.width=8, fig.height=6}
+encounters_across_time_season$variable <- factor(encounters_across_time_season$variable, levels=c("Human(s)", "Human(s) + Livestock", "Human(s) + Dog(s) +/- Livestock", "Chased from garbage"))
+
+ggplot(encounters_across_time_season, aes(x=Hydroyear, y=value, fill=variable)) + 
+  labs(x="Hydrological Year", y="Human Encounter Rate", fill="Type of Human Encounter") + theme_bw() +
+  geom_area(size=.5, color="white") + scale_fill_manual(values = c('#663366', '#33638DFF', '#238A8DFF', 'black')) + facet_wrap(~Season) +
+  theme(axis.text.x=element_text(size=14), axis.title=element_text(size=24), axis.text.y=element_text(size=14)) +
+  theme(legend.title = element_text(size = 16),legend.text = element_text(size = 14), legend.position = c(0.75, 0.83), strip.text.x = element_text(size=22)) + ylim(0, 0.9)
+
+```
+
+## Prep for Figures 2B-2F
+```{r}
+
+#rename as well
+all_points$mintime_cat[all_points$mintime_cat == "Waterhole"] <- "Well"
+
+#grab all well points
+wells <- all_points %>% filter(mintime_cat == "Well") %>% select(x,y,mintime_cat)
+
+human_encounters_dogs <- human_encounters_dogs %>% select(x,y,spec_code_cat)
+human_encounters_garbage <- human_encounters_garbage %>% select(x,y,spec_code_cat)
+human_encounters_humansonly <- human_encounters_humansonly %>% select(x,y,spec_code_cat)
+human_encounters_livestock <- human_encounters_livestock %>% select(x,y,spec_code_cat)
+
+
+#change column names to be the same across these 4 tables so we can use rbind
+colnames(human_encounters_dogs) <- c("x", "y", "mintime_cat")
+colnames(human_encounters_garbage) <- c( "x", "y", "mintime_cat")
+colnames(human_encounters_humansonly) <- c("x", "y", "mintime_cat")
+colnames(human_encounters_livestock) <- c("x", "y", "mintime_cat")
+
+#bind the dog points + the well points for plotting later
+plottable_dogs <- rbind(human_encounters_dogs, wells)
+
+#bind the garbage points + the well points for plotting later
+plottable_garbage <- rbind(human_encounters_garbage, wells)
+
+#bind the humans only points + the well points for plotting later
+plottable_humans <- rbind(human_encounters_humansonly, wells)
+
+#bind the livestock points + the well points for plotting later
+plottable_livestock <- rbind(human_encounters_livestock, wells)
+
+
+```
+
+
+## Figure 2B: All human encounters
+```{r fig.width=6, fig.height=5}
+
+ggplot(all_points, aes(x=x, y=y, color=mintime_cat, size=mintime_cat, alpha=mintime_cat)) + 
+  geom_point() + scale_alpha_manual(values=c(0.3, 0.5, 1), guide = 'none') +
+  scale_color_manual(values=c('red', 'gray', 'blue')) +
+  scale_size_manual(values =c(3,3,5), guide = 'none') +
+  theme_bw() +
+  theme(legend.position = c(0.75, 0.12)) +
+  theme(axis.text=element_text(size=14), axis.title=element_blank(), legend.background = element_rect(linetype="solid"), legend.text = element_text(size = 14), legend.title = element_blank()) + ylim(9694000, 9706500) +
+  guides(colour = guide_legend(override.aes = list(size=5))) 
+
+```
+
+## Figure 2C: Human(s)
+```{r fig.width=6, fig.height=5}
+ggplot(plottable_humans, aes(x=x, y=y, color=mintime_cat, size=mintime_cat, alpha=mintime_cat)) + 
+  geom_point() + scale_alpha_manual(values=c(0.5, 0.5, 1), guide = 'none') +
+  scale_color_manual(values=c('#663366', 'gray', 'blue')) +
+  scale_size_manual(values =c(4,4,5), guide = 'none') +
+  theme_bw() +
+  labs(color="Human Encounter Type") +
+  theme(legend.position = c(0.75, 0.12), axis.text=element_text(size=14), axis.title=element_blank(), legend.text = element_text(size = 14), legend.title = element_blank()) +  ylim(9694000, 9706500) +
+  guides(colour = guide_legend(override.aes = list(size=5)))
+```
+
+## Figure 2D: Human(s) + Livestock
+```{r fig.width=6, fig.height=5}
+ggplot(plottable_livestock, aes(x=x, y=y, color=mintime_cat, size=mintime_cat, alpha=mintime_cat)) + 
+  geom_point() + scale_alpha_manual(values=c(0.3, 0.5, 1), guide = 'none') +
+  scale_color_manual(values=c('#33638DFF', 'gray', 'blue')) +
+  scale_size_manual(values =c(4,4,5), guide = 'none') +
+  theme_bw() +
+  labs(color="Human Encounter Type") +
+  theme(legend.position = c(0.75, 0.12), axis.text=element_text(size=14), axis.title=element_blank(), legend.text = element_text(size = 14), legend.title = element_blank()) +  ylim(9694000, 9706500) +
+  guides(colour = guide_legend(override.aes = list(size=5)))
+```
+
+## Figure 2E: Human(s) + Dog(s) +/- Livestock
+```{r fig.width=6, fig.height=5}
+ggplot(plottable_dogs, aes(x=x, y=y, color=mintime_cat, size=mintime_cat, alpha=mintime_cat)) + 
+  geom_point() + scale_alpha_manual(values=c(0.7, 0.5, 1), guide = 'none') +
+  scale_color_manual(values=c('#238A8DFF', 'gray', 'blue')) +
+  scale_size_manual(values =c(4,4,5), guide = 'none') +
+  theme_bw() +
+  labs(color="Human Encounter Type") +
+  theme(legend.position = c(0.75, 0.12), axis.text=element_text(size=14), axis.title=element_blank(), legend.text = element_text(size = 14), legend.title = element_blank()) +  ylim(9694000, 9706500) +
+  guides(colour = guide_legend(override.aes = list(size=5)))
+```
+
+## Figure 2F: Chased from garbage
+```{r fig.width=6, fig.height=5}
+ggplot(plottable_garbage, aes(x=x, y=y, color=mintime_cat, size=mintime_cat, alpha=mintime_cat)) + 
+  geom_point() + scale_alpha_manual(values=c(0.5, 0.5, 1), guide = 'none') +
+  scale_color_manual(values=c('black', 'gray', 'blue')) +
+  scale_size_manual(values =c(4,4,5), guide = 'none') +
+  theme_bw() +
+  labs(color="Human Encounter Type") +
+  theme(legend.position = c(0.75, 0.12), axis.text=element_text(size=14), axis.title=element_blank(), legend.text = element_text(size = 14), legend.title = element_blank()) +  ylim(9694000, 9706500) +
+  guides(colour = guide_legend(override.aes = list(size=5)))
+```
+
+## Figure 3A: Hydroyear-Season plot
+```{r fig.width=6, fig.height=5}
+ggplot(cd_hsg, aes(x=rainfall_hsg, y=events_per_census, color=season)) +
+  geom_point() + 
+  labs(x="Total Rainfall (mm)", y="Human Encounter Frequency", color="Season") +
+  theme_bw() +
+  scale_color_manual(values=c('burlywood4', '#92C5DE')) +
+  theme(axis.text=element_text(size=14), axis.title=element_text(size=20), legend.title = element_text(size = 20),legend.text = element_text(size = 19), legend.position = c(0.85, 0.85)) + geom_smooth(aes(color=NULL), method="lm", color="black")
+
+```
+
+## Figure 3B. Distance from wells
+```{r fig.width=5, fig.height=4}
+#make sure the distances are correct for the y axis as we dont want them out of order
+distance_from_wells$Interval <- factor(distance_from_wells$Interval, levels=c("0-250", "250-500", "500-750", "750-1000", "1000-1250", "1250-1500", "1500-1750", "1750-2000", "2000+"))
+
+#plotting
+ggplot(distance_from_wells, aes(x=Interval, y= Prop_Disturb)) + 
+  geom_col(position="dodge", fill='#92C5DE', color="black") +
+  labs(x="Distance from Nearest Well (m)", y="Proportion of Human Encounter GPS Points")+
+  theme_bw() +
+  theme(axis.text.x=element_text(size=10), axis.title=element_text(size=16))
+
+
+```
+
+## Figure 4A. Well Use Across Time
+```{r fig.width=7, fig.height=5}
+ggplot(well_points, aes(x=date, y=loc2)) + geom_point() +
+  labs(x="Date of Well Use", y="Well ID") + theme_bw() +
+  theme(axis.text.x=element_text(size=20), axis.text.y=element_text(size=20), axis.title=element_text(size=24)) +
+  theme(axis.text.x=element_blank())
+
+#after exporting this plot, we manually drew boxes over active well periods
+
+```
+
+## Figure 4B. Well Activity/Inactivity
+```{r fig.width=5, fig.height=5}
+
+ggplot(well_status, aes(x=inactiveactive, y=closestpoint_dist)) + geom_boxplot(fill=c('aquamarine3','burlywood'), alpha=0.5) + 
+  labs(x="Well Status", y="Distance from Well to Closest \n Edge of Home Range (m)") + 
+  theme_bw() +
+  theme(axis.text.y=element_text(size=14), axis.text.x=element_text(size=14), axis.title=element_text(size=18), title=element_text(size=14))
+
+```
+
+## Figure 4C. Nyayo's Group
+Libraries specific to creating this plot
+```{r}
+#as we are working to plot spatial polygons instead of just points, we need some additional packages loaded
+
+#if you do not have these packages installed, install them first using install.packages() with the package name in quotes within the parentheses
+
+#i would also suggest unloading some of these packages after this section as select from dplyr is impacted 
+
+library(sp)
+library(adehabitatHR)
+library(data.table)
+library(ggplot2)
+library(rgeos)
+library(raster)
+library(dplyr)
+```
+
+Prepping for Plotting
+```{r}
+#make sure date is in the correct date format or it will cause problems
+all_gps_distance$date = as.Date(all_gps_distance$date, "%m/%d/%Y")
+#grab all the gps points for group 1.1 that we're going to need
+fd_11p_death <- all_gps_distance %>%
+  filter(seen_grp == 1.1)
+
+#center data around death of PHA - died 2007-06-24
+fd_11p_death$beforeafter <- NA
+fd_11p_death$beforeafter[which(fd_11p_death$date >= '2004-06-24' & fd_11p_death$date <= '2005-06-23')] <- "a)3_yrs_before"
+fd_11p_death$beforeafter[which(fd_11p_death$date >= '2005-06-24' & fd_11p_death$date <= '2006-06-23')] <- "b)2_yrs_before"
+fd_11p_death$beforeafter[which(fd_11p_death$date >= '2006-06-24' & fd_11p_death$date <= '2007-06-23')] <- "c)1_yr_before"
+fd_11p_death$beforeafter[which(fd_11p_death$date >= '2007-06-24' & fd_11p_death$date <= '2008-06-23')] <- "d)1_yr_after"
+fd_11p_death$beforeafter[which(fd_11p_death$date >= '2008-06-24' & fd_11p_death$date <= '2009-06-23')] <- "e)2_yrs_after"
+fd_11p_death$beforeafter[which(fd_11p_death$date >= '2009-06-24' & fd_11p_death$date <= '2010-06-23')] <- "f)3_yrs_after"
+
+#need to do before and after separate so that we can plot them as different colors
+
+#we are looking at 65,80, and 95% kernel density home ranges for each year
+
+#before 95% kernel density home ranges
+fd_11p_death_before <- fd_11p_death %>%
+  dplyr::filter(beforeafter == c("a)3_yrs_before", "b)2_yrs_before", "c)1_yr_before"))
+
+range11p_death_before.sp <- fd_11p_death_before[, c("beforeafter", "x", "y")]
+coordinates(range11p_death_before.sp) <- c("x", "y")
+proj4string(range11p_death_before.sp) <- CRS( "+proj=utm +zone=18 +datum=WGS84 +units=m +no_defs" )
+kernel.ref <- kernelUD(range11p_death_before.sp, h = "href") 
+range11p_death_before.kernel.poly <- getverticeshr(kernel.ref, percent = 95) 
+range11p_death_before <- as.data.table(range11p_death_before.kernel.poly)
+range11p_death_before <- fortify(range11p_death_before, region="id")
+colnames(range11p_death_before) <- c("beforeafter", "range")
+
+#geom_polygon needs x and y as long and lat in order to function 
+
+#create long and lat column
+range11p_death_before$long <- NA
+range11p_death_before$lat <- NA
+#fill in with x,y values
+range11p_death_before$long <- range11p_death_before$x
+range11p_death_before$lat <- range11p_death_before$y
+
+#before, 80% kernel density home ranges
+
+kernel.ref <- kernelUD(range11p_death_before.sp, h = "href") 
+range11p_death_before75.kernel.poly <- getverticeshr(kernel.ref, percent = 80) 
+range11p_death_before75 <- as.data.table(range11p_death_before75.kernel.poly)
+range11p_death_before75 <- fortify(range11p_death_before75, region="id")
+colnames(range11p_death_before75) <- c("beforeafter", "range")
+
+#before, 65% kernel density home ranges
+
+kernel.ref <- kernelUD(range11p_death_before.sp, h = "href") 
+range11p_death_before65.kernel.poly <- getverticeshr(kernel.ref, percent = 65) 
+range11p_death_before65 <- as.data.table(range11p_death_before65.kernel.poly)
+range11p_death_before65 <- fortify(range11p_death_before65, region="id")
+colnames(range11p_death_before65) <- c("beforeafter", "range")
+
+#after ranges, 95% kernel density home ranges
+fd_11p_death_after <- fd_11p_death %>%
+  filter(beforeafter == c("d)1_yr_after", "e)2_yrs_after", "f)3_yrs_after"))
+
+range11p_death_after.sp <- fd_11p_death_after[, c("beforeafter", "x", "y")]
+coordinates(range11p_death_after.sp) <- c("x", "y")
+proj4string(range11p_death_after.sp) <- CRS( "+proj=utm +zone=18 +datum=WGS84 +units=m +no_defs" )
+kernel.ref <- kernelUD(range11p_death_after.sp, h = "href") 
+range11p_death_after.kernel.poly <- getverticeshr(kernel.ref, percent = 95) 
+range11p_death_after <- as.data.table(range11p_death_after.kernel.poly)
+range11p_death_after <- fortify(range11p_death_after, region="id")
+colnames(range11p_death_after) <- c("beforeafter", "range")
+
+#geom_polygon needs x and y as long and lat in order to function 
+
+#create long and lat column
+range11p_death_after$long <- NA
+range11p_death_after$lat <- NA
+#fill in with x,y values
+range11p_death_after$long <- range11p_death_after$x
+range11p_death_after$lat <- range11p_death_after$y
+
+#after, 80% kernel density home ranges
+kernel.ref <- kernelUD(range11p_death_after.sp, h = "href") 
+range11p_death_after75.kernel.poly <- getverticeshr(kernel.ref, percent = 80) 
+range11p_death_after75 <- as.data.table(range11p_death_after75.kernel.poly)
+range11p_death_after75 <- fortify(range11p_death_after75, region="id")
+colnames(range11p_death_after75) <- c("beforeafter", "range")
+
+#after, 65% kernel density home ranges
+kernel.ref <- kernelUD(range11p_death_after.sp, h = "href") 
+range11p_death_after65.kernel.poly <- getverticeshr(kernel.ref, percent = 65) 
+range11p_death_after65 <- as.data.table(range11p_death_after65.kernel.poly)
+range11p_death_after65 <- fortify(range11p_death_after65, region="id")
+colnames(range11p_death_after65) <- c("beforeafter", "range")
+
+#now we have all of our home range polygons acquired in these .poly files
+
+#we also want to be able to plot the wells on the ggplot so we can see the shifting of the home ranges based on well activity
+#grab PHABC from the well dataframe and just select the x and y columns
+PHA <- waterhole_df %>% filter(loc == "PHA") %>% dplyr::select(x,y)
+PHB <- waterhole_df %>% filter(loc == "PHB") %>% dplyr::select(x,y)
+PHC <- waterhole_df %>% filter(loc == "PHC") %>% dplyr::select(x,y)
+
+#for the ggplot we are using, it only recognizes long and lat instead of x and y so we have to create columns long and lat from the x and y columns
+
+PHA$long <- PHA$x
+PHA$lat <- PHA$y
+PHB$long <- PHB$x
+PHB$lat <- PHB$y
+PHC$long <- PHC$x
+PHC$lat <- PHC$y
+
+```
+
+Plotting Figure 4C
+```{r fig.width=6, fig.height=3.5}
+
+#separately plot each .poly files using geom_polygon() and make before and after ranges distinct colors from one another
+
+ggplot(NULL, aes(x=long, y=lat)) +
+  geom_polygon(data=range11p_death_before.kernel.poly, alpha = .4, fill=("burlywood")) +
+  geom_polygon(data=range11p_death_before75.kernel.poly, alpha = .4, fill=("burlywood3")) +
+  geom_polygon(data=range11p_death_before65.kernel.poly, alpha = .4, fill=("burlywood4")) +
+  geom_polygon(data=range11p_death_after.kernel.poly, alpha = .4, fill=("aquamarine3")) +
+  geom_polygon(data=range11p_death_after75.kernel.poly, alpha = .4, fill=("aquamarine4")) +
+  geom_polygon(data=range11p_death_after65.kernel.poly, alpha = .4, fill=('#006666')) +
+  coord_equal() +
+  theme_bw() +
+  geom_point(data=PHA, alpha=0.4, color="blue",size=2) +
+  geom_point(data=PHB, alpha=0.4, color="blue", size=2) +
+  geom_point(data=PHC, alpha=0.4, color="blue", size=2) +
+  labs(x="x", y="y") + facet_wrap(~ id) +
+  theme(plot.title = element_text(hjust = 0.5, size=15))
+
+
+```
+
+## Figure 5. Causes of Death Across Time
+```{r fig.width=6, fig.height=3}
+
+#creating a categorical variable for the cause of death
+mortality_causes$cause_cat <- factor(mortality_causes$cause_cat, levels=c("Accident", "Conspecific", "Pathology", "Predation", "Interruption of maternal care", "Unknown", "Human/Dog"))
+
+#setting the order of the levels so they appear in age order on the plot
+mortality_causes$age_cat <- factor(mortality_causes$age_cat, levels=c("Infant", "Juvenile", "Animals > 5 years old"))
+
+# Creating a second data frame that has one row for each interval and age category combination and the death count
+mortality_causes_label <- mortality_causes %>% 
+  dplyr::select(age_cat, year_interval, death_count) %>% 
+  distinct() %>% 
+  # adding a blank cause cat column to fill by (just as a blank fill, it won't actually show up in the plot)
+  mutate(cause_cat = NA)
+
+#FINAL PLOT FOR CAUSES OF DEATH
+ggplot(mortality_causes, aes(year_interval, prop_cause, fill=cause_cat)) + 
+  geom_col()  + 
+  facet_wrap( ~ age_cat) + 
+  labs(x="Year Interval", y="Proportion of Deaths", fill="Cause of Death") +
+  theme_bw() +
+  theme(axis.text=element_text(size=12), axis.title=element_text(size=20), legend.title = element_text(size=18), legend.text = element_text(size=14)) + 
+  scale_fill_manual("Cause of Death", values = c("Accident" = "#67001F", "Conspecific" = "#F4A582", "Human/Dog" = "red", "Pathology" = "#4393C3",  "Predation"="#053061", "Interruption of maternal care" = "#92C5DE", "Unknown" = "grey43")) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  theme(strip.text.x = element_text(size = 12)) +
+  # adding the labels here using the new data frame we just created
+  geom_text(data=mortality_causes_label, aes(fill = cause_cat, x = year_interval, y=1, label=death_count),
+            position = position_dodge(0.9),vjust=-0.5) +                                           # Increase spacing between plot panels
+  theme(panel.spacing = unit(1.2, "cm"))
+
+```
+
+## Table 1.  Predictors of the shortest straight-line distance between the edge of a given social group’s range and transitioning wells
+
+See Table S3 to understand the random and fixed effects used in models used to predict the shortest straight-line distance between the edge of a given social group’s range (as 95% kernel densities) and wells that transitioned from inactive to active or vice versa 
+```{r}
+#complete model is the best model
+lm_wellstatus <- lmer(closestpoint_dist ~ inactiveactive + centered_nearest_wh_dist + centered_range + (1|grp) + (1|wh), data=well_status)
+
+summary(lm_wellstatus)
+
+```
+
+## Figure S2. GPS locations of human-constructed wells (blue points) that transitioned from inactive to active or vice versa between 2004 and 2020 and were used in the analyses depicted in Fig. 4A.
+```{r fig.width=6, fig.height=5}
+
+ggplot(supplement_figure_points, aes(x=x, y=y, color=mintime_cat, size=mintime_cat)) + geom_point() + theme_bw() + scale_color_manual(values=c('gray', 'blue'))+ theme(legend.position = "none") +
+  scale_size_manual(values=c(1,2)) + labs(x="North-south UTM coordinates", y="East-west UTM coordinates") + theme(axis.title = element_text(size=18))
+
+```
+
+
+## Table S8. Predictors of human encounter frequency for each hydrological year and season from 1993-2020
+
+See Table S1 to understand the random and fixed effects used in the model of environmental and group-level predictors of human-baboon encounters 
+```{r}
+
+#complete model
+lmGS_complete <- lmer(events_per_census ~ centered_group_size_avg + centered_group_size_sq
+               + centered_rainfall_hsg 
+               + centered_temp_hsg
+               + season
+               + hydroyear_scaled
+               + season*hydroyear_scaled
+               + (1|grp), data=cd_hsg)
+summary(lmGS_complete)
+
+
+#best model
+lmGS_best <- lmer(events_per_census ~ centered_rainfall_hsg 
+               + (1|grp), data=cd_hsg)
+summary(lmGS_best)
+```
+
+## Table S9. Predictors of human encounter frequency for each hydrological year and season from 2004-2020, including home range
+
+See Table S1 to understand the random and fixed effects used in the model of environmental and group-level predictors of human-baboon encounters 
+```{r}
+#complete model
+lmHR_complete <- lmer(events_per_census ~ centered_group_size_avg + centered_group_size_sq
+               + centered_rainfall_hsg 
+               + centered_temp_hsg
+               + centered_HR_hydroyearseason
+               + centered_HR_sq
+               + season
+               + hydroyear_scaled
+               + season*hydroyear_scaled
+               + (1|grp), data=cd_hsg_home_range)
+summary(lmHR_complete)
+
+#best model 
+lmHR_best <- lmer(events_per_census ~  season
+               + (1|grp), data=cd_hsg_home_range)
+summary(lmHR_best)
+```
+
+## Table S10. Proximity to wells as a predictor of human encounter events.
+
+See Table S2 to understand the random and fixed effects used in the model of group proximity to human-constructed wells.
+```{r}
+#complete model
+lmdistance_complete <- glmer(mintime_binom ~ season  + hydroyear_scaled + centered_rain_month_before + centered_avg_month_temp + centered_dist_to_closest_waterhole 
+                        + (1|seen_grp), 
+                        data=all_gps_distance,
+                        family=binomial, na.action = "na.fail")
+summary(lmdistance_complete)
+
+#best model
+lmdistance_best <- glmer(mintime_binom ~ season  + hydroyear_scaled + centered_rain_month_before + centered_dist_to_closest_waterhole 
+                        + (1|seen_grp), 
+                        data=all_gps_distance,
+                        family=binomial)
+summary(lmdistance_best)
+```
+
+## Table S11 Top. Predictors of infant mortality as a fucntion of human encounters during the prenatal period
+
+See Table S4 to understand the random and fixed effects used in models of infant mortality.
+```{r}
+# complete model
+lm_infantmort_complete <- glmer(survived ~ centered_mom_age 
+                   + centered_mom_age_sq 
+                   +rank 
+                   + primiparity
+                   + centered_rain_during_pregnancy 
+                   + season 
+                   + centered_child_group_size_birth
+                   + centered_dis_census_natal
+                   + (1|sname), data=infant_mortality, family=binomial)
+summary(lm_infantmort_complete)
+
+
+#best model
+lm_infantmort_best <- glmer(survived ~ centered_mom_age 
+                    + centered_mom_age_sq
+                    + centered_child_group_size_birth
+                    + centered_dis_census_natal
+                    + (1|sname), data=infant_mortality, family=binomial)
+summary(lm_infantmort_best)
+```
+
+## Table S11 Bottom. Predictors of infant mortality as a fucntion of human encounters in the 180 days before the infant died or reached 70 weeks of age
+
+See Table S4 to understand the random and fixed effects used in models of infant mortality.
+```{r}
+#complete model
+lm_infantmort_complete_bottom <- glmer(as.factor(survived_cat) ~ centered_mom_age 
+                   + centered_mom_age_sq 
+                   +rank 
+                   + primiparity
+                   + centered_rain_during_pregnancy 
+                   + season 
+                   + centered_child_group_size_birth
+                   + centered_dis_census_stat
+                   + (1|sname), data=infant_mortality, family=binomial)
+summary(lm_infantmort_complete_bottom)
+
+
+#best model
+lm_infantmort_best_bottom <- glmer(as.factor(survived_cat) ~ centered_mom_age 
+                    + centered_mom_age_sq
+                    + centered_rain_during_pregnancy 
+                    + (1|sname), data=infant_mortality, family=binomial)
+summary(lm_infantmort_best_bottom)
+```
+
+## Table S12. Predictors of parasite richness in female baboons.
+
+See Table S6 to understand the random and fixed effects used in models of parasitism. 
+```{r}
+#complete model 
+lm_richness_females_complete <- lmer(richness ~ centered_SCI_F 
+              + centered_SCI_M 
+              + centered_age 
+              + rank 
+              + alphabeta
+              + season
+              + centered_group_size_actual 
+              + centered_group_size_sq
+              + state
+              + centered_avg_3mo_temp 
+              + centered_rain_3mo_before
+              + centered_dis_census_3mo
+              + (1|sname) + (1|grp) + (1|who_counted), data=parasitism_females)
+summary(lm_richness_females_complete)
+
+#best model
+lm_richness_females_best <- lmer(richness ~ centered_avg_3mo_temp + centered_dis_census_3mo
+               + (1|sname) + (1|grp) + (1|who_counted), data=parasitism_females)
+summary(lm_richness_females_best)
+
+```
+
+## Table S12. Predictors of parasite richness in male baboons.
+
+See Table S6 to understand the random and fixed effects used in models of parasitism. 
+```{r}
+#complete model
+lm_richness_males_complete <- lmer(richness ~ centered_SCI_F 
+              + centered_age 
+              + rank 
+              + alphabeta
+              + season  
+              + centered_group_size_actual 
+              + centered_group_size_sq
+              + centered_avg_3mo_temp
+              + centered_rain_3mo_before
+              + centered_dis_census_3mo
+              + (1|sname) + (1|grp) + (1|who_counted), data=parasitism_males)
+summary(lm_richness_males_complete)
+
+
+#best model
+lm_richness_males_best <- lmer(richness ~ season + centered_rain_3mo_before
+              + (1|sname) + (1|who_counted), data=parasitism_males)
+summary(lm_richness_males_best)
+
+```
+
+## Table S13. Predictors of log-transformed whipworm egg counts in female baboons.
+
+See Table S6 to understand the random and fixed effects used in models of parasitism.
+```{r}
+#complete model
+lm_trichuris_females_complete <- lmer(log_trichuris ~ centered_SCI_F 
+              + centered_SCI_M 
+              + centered_age 
+              + rank
+              + alphabeta
+              + season 
+              + centered_rain_3mo_before
+              + centered_avg_3mo_temp 
+              + centered_group_size_actual
+              + centered_group_size_sq
+              + state
+              + centered_dis_census_3mo
+              + (1|sname) + (1|grp) + (1|who_counted), data=parasitism_females)
+summary(lm_trichuris_females_complete)
+
+#best model
+lm_trichuris_females_best <- lmer(log_trichuris ~ centered_SCI_F 
+              + centered_age
+              + centered_rain_3mo_before
+              + (1|sname) + (1|grp) + (1|who_counted), data=parasitism_females)
+summary(lm_trichuris_females_best)
+
+```
+
+
+## Table S13. Predictors of log-transformed whipworm egg counts in male baboons.
+
+See Table S6 to understand the random and fixed effects used in models of parasitism.
+```{r}
+#complete model
+lm_trichuris_males_complete <- lmer(log_trichuris ~ centered_SCI_F 
+              + centered_age 
+              + rank 
+              + alphabeta
+              + season 
+              + centered_rain_3mo_before
+              + centered_avg_3mo_temp 
+              + centered_group_size_actual 
+              + centered_group_size_sq
+              + centered_dis_census_3mo
+              + (1|sname)  + (1|grp) + (1|who_counted), data=parasitism_males)
+summary(lm_trichuris_males_complete)
+
+
+#best model
+lm_trichuris_males_best <- lmer(log_trichuris ~ centered_SCI_F 
+              + centered_age 
+              + centered_rain_3mo_before
+              + (1|sname)  + (1|grp) + (1|who_counted), data=parasitism_males)
+summary(lm_trichuris_males_best)
+
+```
+
+## Table S14. Predictors of interbirth interval duration.
+
+See Table S5 to understand the random and fixed effects used in models of interbirth interval duration 
+```{r}
+#complete model
+lmibi_complete <- lmer(log_ibi ~ centered_mom_age 
+                  + centered_mom_age_sq 
+                  + rank
+                  + primiparity
+                  + centered_rainfall_ibi
+                  + season
+                  + centered_child_group_size_birth
+                  + centered_dis_census_ibi
+                  + (1|sname) + (1|child_matgrp), data=interbirth_intervals)
+summary(lmibi_complete)
+
+#best model
+lmibi_best <- lmer(log_ibi ~ centered_mom_age 
+                  + centered_mom_age_sq 
+                  + rank
+                  + (1|sname) + (1|child_matgrp), data=interbirth_intervals)
+summary(lmibi_best)
+
+```
+
+
+## Table S15. Predictors of log fGC concentrations in female baboons.
+
+See Table S7 to understand the random and fixed effects used in models of fGCS.
+```{r}
+#complete model
+lm_gc_females_complete <- lmer(log_gc ~ centered_SCI_F 
+              + centered_SCI_M 
+              + centered_age 
+              + rank
+              + alphabeta
+              + season
+              + centered_rain_3mo_before
+              + centered_avg_month_temp 
+              + centered_group_size_actual
+              + centered_group_size_sq
+              + state
+              + centered_years_meth_to_assay 
+              + centered_years_collected_to_meth
+              + centered_dis_census_3mo
+              + (1|sname) + (1|grp), data=gc_females)
+summary(lm_gc_females_complete)
+
+#best model
+lm_gc_females_best <- lmer(log_gc ~ centered_age
+               + season
+               + centered_rain_3mo_before
+               + centered_group_size_actual
+               + state
+               + centered_years_meth_to_assay 
+               + centered_years_collected_to_meth
+               + (1|sname) + (1|grp), data=gc_females)
+summary(lm_gc_females_best)
+
+```
+
+## Table S15. Predictors of log fGC concentrations in male baboons.
+
+See Table S7 to understand the random and fixed effects used in models of fGCS.
+```{r}
+#complete model
+lm_gc_males_complete <- lmer(log_gc ~  centered_SCI_F  
+              + centered_age 
+              + rank 
+              + alphabeta
+              + season
+              + centered_rain_3mo_before
+              + centered_avg_month_temp
+              + centered_group_size_actual 
+              + centered_group_size_sq
+              + centered_years_meth_to_assay 
+              + centered_years_collected_to_meth
+              + centered_dis_census_3mo
+              + (1|grp) + (1|sname), data=gc_males)
+summary(lm_gc_males_complete)
+
+#best model
+lm_gc_males_best <- lmer(log_gc ~  centered_age
+               + alphabeta
+               + centered_group_size_actual 
+               + centered_years_meth_to_assay 
+               + centered_years_collected_to_meth
+               + (1|grp) + (1|sname), data=gc_males)
+summary(lm_gc_males_best)
+```
+
